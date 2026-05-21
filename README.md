@@ -4,7 +4,11 @@
 
 ## Introduction
 
-This is the official implementation for our paper **"SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking"**. This paper is accepted by **International Journal of Computer Vision (IJCV)**.
+This is the official implementation for our paper **"**
+
+[SWAP:]: https://arxiv.org/abs/2511.04711
+
+**"**. This paper is accepted by **International Journal of Computer Vision (IJCV)**.
 
 ---
 
@@ -102,13 +106,10 @@ This codebase builds upon and adapts ideas from:
 ## Citation
 
 ```bibtex
-@misc{yang2025swapcopyrightauditingsoft,
+@article{yang2026swapcopyrightauditingsoft,
       title={SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking}, 
       author={Wenyuan Yang and Yichen Sun and Changzheng Chen and Zhixuan Chu and Jiaheng Zhang and Yiming Li and Dacheng Tao},
-      year={2025},
-      eprint={2511.04711},
-      archivePrefix={arXiv},
-      primaryClass={cs.CR},
-      url={https://arxiv.org/abs/2511.04711}, 
+      journal={International Journal of Computer Vision}
+      year={2026}
 }
 ```
