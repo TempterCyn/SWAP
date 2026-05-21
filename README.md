@@ -25,9 +25,7 @@ The project is organized for reproducible experiments in:
 
 ## Overview
 
-Pipeline overview (local source file):
-
-- `E:\浏览器下载\POVSW_pipeline (1).pdf`
+![SWAP Overview](docs/figures/overview.png)
 
 ```text
 SWAP/
@@ -101,15 +99,7 @@ bash scripts/swap_cocoop/base2new_train.sh imagenet 1
 
 ## Main Results
 
-The table below reports watermarking and verification performance (`WSR`, `p-value`, `Ĥ`) while also showing utility (`ACC Base/Novel`) on three datasets.
-
-| Prompt Tuning Method | Protection Method | ImageNet (Base / Novel / WSR / p-value / Ĥ) | Caltech101 (Base / Novel / WSR / p-value / Ĥ) | OxfordPets (Base / Novel / WSR / p-value / Ĥ) |
-|---|---|---|---|---|
-| CoCoOp | SWAP (ours) | 75.89 / 70.10 / 99.98 / 0 / 0.00 | 97.65 / 93.10 / 99.67 / 0 / 0.01 | 94.92 / 97.40 / 99.36 / 0 / 0.00 |
-| MaPLe | SWAP (ours) | 77.13 / 69.26 / 99.95 / 0 / 0.01 | 97.30 / 95.31 / 99.99 / 0 / 0.01 | 95.03 / 96.82 / 99.94 / 0 / 0.01 |
-| PromptSRC | SWAP (ours) | 77.43 / 70.48 / 99.97 / 0 / 0.00 | 96.28 / 94.21 / 99.94 / 0 / 0.00 | 96.13 / 96.80 / 99.99 / 0 / 0.01 |
-
-For full comparisons with baselines, please refer to your original Table 3 figure.
+![Main Results (Table 3)](docs/figures/table3.png)
 
 ---
 
@@ -140,6 +130,16 @@ This codebase builds upon and adapts ideas from:
 
 ---
 
-## Citation Info
+## Citation
 
-Paper link: [https://arxiv.org/abs/2511.04711](https://arxiv.org/abs/2511.04711)
+```bibtex
+@misc{yang2025swapcopyrightauditingsoft,
+      title={SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking}, 
+      author={Wenyuan Yang and Yichen Sun and Changzheng Chen and Zhixuan Chu and Jiaheng Zhang and Yiming Li and Dacheng Tao},
+      year={2025},
+      eprint={2511.04711},
+      archivePrefix={arXiv},
+      primaryClass={cs.CR},
+      url={https://arxiv.org/abs/2511.04711}, 
+}
+```
