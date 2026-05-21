@@ -1,19 +1,24 @@
 import os.path as osp
+from collections import OrderedDict
+import math
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.cuda.amp import GradScaler, autocast
-
+from dassl.data import DataManager, DatasetWrapper
 from dassl.engine import TRAINER_REGISTRY, TrainerX
+from dassl.metrics import compute_accuracy
 from dassl.utils import load_pretrained_weights, load_checkpoint
 from dassl.optim import build_optimizer, build_lr_scheduler
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from tqdm import tqdm
+from dassl.evaluation import build_evaluator
 
 _tokenizer = _Tokenizer()
-
+torch.cuda.set_device(2)
 
 def load_clip_to_cpu(cfg):
     backbone_name = cfg.MODEL.BACKBONE.NAME
@@ -27,10 +32,10 @@ def load_clip_to_cpu(cfg):
 
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'IVLP',
-                      "vision_depth": cfg.TRAINER.IVLP.PROMPT_DEPTH_VISION,
-                      "language_depth": cfg.TRAINER.IVLP.PROMPT_DEPTH_TEXT, "vision_ctx": cfg.TRAINER.IVLP.N_CTX_VISION,
-                      "language_ctx": cfg.TRAINER.IVLP.N_CTX_TEXT}
+    design_details = {"trainer": 'CoCoOp',
+                      "vision_depth": 0,
+                      "language_depth": 0, "vision_ctx": 0,
+                      "language_ctx": 0}
     model = clip.build_model(state_dict or model.state_dict(), design_details)
 
     return model
@@ -59,16 +64,12 @@ class TextEncoder(nn.Module):
         return x
 
 
-class VLPromptLearner(nn.Module):
+class PromptLearner(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
         n_cls = len(classnames)
-        # Make sure Language depth >= 1
-        assert cfg.TRAINER.IVLP.PROMPT_DEPTH_TEXT >= 1, "In Independent VL prompting, Language prompt depth should be >=1" \
-                                                        "\nPlease use VPT trainer if you want to learn only vision " \
-                                                        "branch  "
-        n_ctx = cfg.TRAINER.IVLP.N_CTX_TEXT
-        ctx_init = cfg.TRAINER.IVLP.CTX_INIT
+        n_ctx = cfg.TRAINER.COCOOP.N_CTX
+        ctx_init = cfg.TRAINER.COCOOP.CTX_INIT
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
         vis_dim = clip_model.visual.output_dim
@@ -76,25 +77,34 @@ class VLPromptLearner(nn.Module):
         cfg_imsize = cfg.INPUT.SIZE[0]
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
-        if ctx_init and (n_ctx) <= 4:
-            # Use given words to initialize context vectors
+        if ctx_init:
+            # use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
-            n_ctx = n_ctx
+            n_ctx = len(ctx_init.split(" "))
             prompt = clip.tokenize(ctx_init)
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt).type(dtype)
             ctx_vectors = embedding[0, 1: 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
-            # Random initialization
+            # random initialization
             ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-        print(f"Independent V-L design")
-        print(f'Initial text context: "{prompt_prefix}"')
-        print(f"Number of context words (tokens) for Language prompting: {n_ctx}")
-        print(f"Number of context words (tokens) for Vision prompting: {cfg.TRAINER.IVLP.N_CTX_VISION}")
+
+        print(f'Initial context: "{prompt_prefix}"')
+        print(f"Number of context words (tokens): {n_ctx}")
+
         self.ctx = nn.Parameter(ctx_vectors)
+
+        self.meta_net = nn.Sequential(OrderedDict([
+            ("linear1", nn.Linear(vis_dim, vis_dim // 16)),
+            ("relu", nn.ReLU(inplace=True)),
+            ("linear2", nn.Linear(vis_dim // 16, ctx_dim))
+        ]))
+
+        if cfg.TRAINER.COCOOP.PREC == "fp16":
+            self.meta_net.half()
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
@@ -136,14 +146,22 @@ class VLPromptLearner(nn.Module):
 
         return prompts
 
-    def forward(self):
-        ctx = self.ctx
-        if ctx.dim() == 2:
-            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
-
+    def forward(self, im_features):
         prefix = self.token_prefix
         suffix = self.token_suffix
-        prompts = self.construct_prompts(ctx, prefix, suffix)
+        ctx = self.ctx  # (n_ctx, ctx_dim)
+        bias = self.meta_net(im_features)  # (batch, ctx_dim)
+        bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
+        ctx = ctx.unsqueeze(0)  # (1, n_ctx, ctx_dim)
+        ctx_shifted = ctx + bias  # (batch, n_ctx, ctx_dim)
+
+        # Use instance-conditioned context tokens for all classes
+        prompts = []
+        for ctx_shifted_i in ctx_shifted:
+            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
+            pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
+            prompts.append(pts_i)
+        prompts = torch.stack(prompts)
 
         return prompts
 
@@ -151,7 +169,7 @@ class VLPromptLearner(nn.Module):
 class CustomCLIP(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
-        self.prompt_learner = VLPromptLearner(cfg, classnames, clip_model)
+        self.prompt_learner = PromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
@@ -162,33 +180,73 @@ class CustomCLIP(nn.Module):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        prompts = self.prompt_learner()
-        text_features = self.text_encoder(prompts, tokenized_prompts)
         image_features = self.image_encoder(image.type(self.dtype))
-
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        logits = logit_scale * image_features @ text_features.t()
+
+        prompts = self.prompt_learner(image_features)
+
+        logits = []
+        for pts_i, imf_i in zip(prompts, image_features):
+            text_features = self.text_encoder(pts_i, tokenized_prompts)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            l_i = logit_scale * imf_i @ text_features.t()
+            logits.append(l_i)
+        logits = torch.stack(logits)
 
         if self.prompt_learner.training:
-            return F.cross_entropy(logits, label)
+            # Ensure labels use the correct Long dtype.
+            label = label.long()
+            
+            # Standard classification loss, computed only over the non-target classes.
+            loss_cls = F.cross_entropy(logits[:, :-4], label)
+            
+            # Add an ordering loss on the last four target classes.
+            target_logits = logits[:, -4:]  # Get logits for the last four target classes.
+            
+            # Compute adjacent logit differences; each later target should be larger than the previous one.
+            diffs = target_logits[:, 1:] - target_logits[:,:-1]
+            # Use a hinge loss to enforce the differences to be larger than a margin.
+            margin = 0.5
+            loss_order = F.relu(margin - diffs).mean()
+            
+            return loss_cls + loss_order
 
         return logits
 
 
 @TRAINER_REGISTRY.register()
-class IVLP(TrainerX):
+class CoCoOp(TrainerX):
+
     def check_cfg(self, cfg):
-        assert cfg.TRAINER.IVLP.PREC in ["fp16", "fp32", "amp"]
+        assert cfg.TRAINER.COCOOP.PREC in ["fp16", "fp32", "amp"]
 
     def build_model(self):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
+        
+        # Append four target classes to the end of the class list.
+        if any(f'target{i}' not in classnames for i in range(1, 5)):
+            # Add the four target classes at the end.
+            classnames.extend([f'target{i}' for i in range(1, 5)])
+            
+            # Update the lab2cname mapping.
+            original_class_count = len(self.lab2cname)
+            new_lab2cname = self.lab2cname.copy()
+            
+            # New class labels start from the original number of classes.
+            for i in range(4):
+                new_lab2cname[original_class_count + i] = f'target{i+1}'
+            
+            self.lab2cname = new_lab2cname
+
+        # Print the updated lab2cname mapping.
+        print("\nAfter update lab2cname:")
+        print(self.lab2cname)
 
         print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
         clip_model = load_clip_to_cpu(cfg)
 
-        if cfg.TRAINER.IVLP.PREC == "fp32" or cfg.TRAINER.IVLP.PREC == "amp":
+        if cfg.TRAINER.COCOOP.PREC == "fp32" or cfg.TRAINER.COCOOP.PREC == "amp":
             # CLIP's default precision is fp16
             clip_model.float()
 
@@ -200,11 +258,7 @@ class IVLP(TrainerX):
 
         for name, param in self.model.named_parameters():
             if name_to_update not in name:
-                # Make sure that VPT prompts are updated
-                if "VPT" in name:
-                    param.requires_grad_(True)
-                else:
-                    param.requires_grad_(False)
+                param.requires_grad_(False)
 
         # Double check
         enabled = set()
@@ -214,22 +268,22 @@ class IVLP(TrainerX):
         print(f"Parameters to be updated: {enabled}")
 
         if cfg.MODEL.INIT_WEIGHTS:
-            load_pretrained_weights(self.model, cfg.MODEL.INIT_WEIGHTS)
+            load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
 
         self.model.to(self.device)
         # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model, cfg.OPTIM)
+        self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
-        self.register_model("VLPromptLearner", self.model, self.optim, self.sched)
+        self.register_model("prompt_learner", self.model.prompt_learner, self.optim, self.sched)
 
-        self.scaler = GradScaler() if cfg.TRAINER.IVLP.PREC == "amp" else None
+        self.scaler = GradScaler() if cfg.TRAINER.COCOOP.PREC == "amp" else None
 
         # Note that multi-gpu training could be slow because CLIP's size is
         # big, which slows down the copy operation in DataParallel
         device_count = torch.cuda.device_count()
         if device_count > 1:
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
-            self.model = nn.DataParallel(self.model)
+            # self.model = nn.DataParallel(self.model)
 
     def forward_backward(self, batch):
         image, label = self.parse_batch_train(batch)
@@ -238,7 +292,7 @@ class IVLP(TrainerX):
         optim = self.optim
         scaler = self.scaler
 
-        prec = self.cfg.TRAINER.IVLP.PREC
+        prec = self.cfg.TRAINER.COCOOP.PREC
         if prec == "amp":
             with autocast():
                 loss = model(image, label)
@@ -258,6 +312,7 @@ class IVLP(TrainerX):
             self.update_lr()
 
         return loss_summary
+
 
     def parse_batch_train(self, batch):
         input = batch["img"]
@@ -290,12 +345,92 @@ class IVLP(TrainerX):
             epoch = checkpoint["epoch"]
 
             # Ignore fixed token vectors
-            if "prompt_learner.token_prefix" in state_dict:
-                del state_dict["prompt_learner.token_prefix"]
+            if "token_prefix" in state_dict:
+                del state_dict["token_prefix"]
 
-            if "prompt_learner.token_suffix" in state_dict:
-                del state_dict["prompt_learner.token_suffix"]
+            if "token_suffix" in state_dict:
+                del state_dict["token_suffix"]
 
             print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
             # set strict=False
             self._models[name].load_state_dict(state_dict, strict=False)
+
+    @torch.no_grad()
+    def test(self, split=None):
+        """A generic testing pipeline."""
+        self.set_model_mode("eval")
+        self.evaluator.reset()
+
+        # Check and add target classes if needed.
+        for i in range(1, 5):
+            target_name = f'target{i}'
+            if target_name not in self.dm.dataset.classnames:
+                self.dm.dataset.classnames.append(target_name)
+                # Update the lab2cname mapping.
+                new_lab2cname = {}
+                for label, name in self.lab2cname.items():
+                    new_lab2cname[label] = name
+                # Add the new class to the end.
+                new_lab2cname[len(self.lab2cname)] = target_name
+                self.lab2cname = new_lab2cname
+        
+        # Rebuild the evaluator with the updated label-to-class mapping.
+        self.evaluator = build_evaluator(self.cfg, lab2cname=self.lab2cname)
+        
+        if split is None:
+            split = self.cfg.TEST.SPLIT
+
+        if split == "val" and self.val_loader is not None:
+            data_loader = self.val_loader
+        else:
+            split = "test"
+            data_loader = self.test_loader
+
+        print(f"Evaluate on the *{split}* set")
+
+        total_samples = 0
+        correct_order_count = 0
+
+        for batch_idx, batch in enumerate(tqdm(data_loader)):
+            input, label = self.parse_batch_test(batch)
+            output = self.model_inference(input)
+            self.evaluator.process(output, label)
+
+            # Check the target-class order; the target classes are now the last four classes.
+            target_logits = output[:, -4:]  # Get logits for the last four target classes.
+            
+            # Compute adjacent logit differences; each later target should be larger than the previous one.
+            diffs = target_logits[:, 1:] - target_logits[:, :-1]
+            # Check whether all adjacent differences are greater than zero for each sample.
+            correct_order = (diffs > 0).all(dim=1)
+            
+            # Find samples with an incorrect target-class order.
+            wrong_order_indices = torch.where(~correct_order)[0]
+            if len(wrong_order_indices) > 0:
+                print("\nSamples with incorrect target-class order:")
+                for idx in wrong_order_indices:
+                    # Get target-class logits for this sample.
+                    sample_logits = target_logits[idx]
+                    # Get indices after sorting the logits.
+                    sorted_indices = torch.argsort(sample_logits, descending=True)
+                    # Convert sorted indices to target-class names.
+                    sorted_targets = [f"target{i+1}" for i in sorted_indices.tolist()]
+                    # Print raw logit values and the sorted target-class order.
+                    print(f"Sample {batch_idx}_{idx}:")
+                    print(f"Target-class logit values: {sample_logits.tolist()}")
+                    print(f"Target-class ranking: {' > '.join(sorted_targets)}")
+                    print("------------------------")
+            
+            correct_order_count += correct_order.sum().item()
+            total_samples += output.size(0)
+
+        results = self.evaluator.evaluate()
+        print("\nFinal results:")
+        print(f"Classification accuracy: {list(results.values())[0]:.2f}%")
+        print(f"Target-class order accuracy: {(correct_order_count/total_samples)*100:.2f}%")
+
+        for k, v in results.items():
+            tag = f"{split}/{k}"
+            self.write_scalar(tag, v, self.epoch)
+
+        return list(results.values())[0]
