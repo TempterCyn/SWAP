@@ -10,7 +10,7 @@ This is the official implementation for our paper **"SWAP: Towards Copyright Aud
 
 ## Overview
 
-![image-20260521112428722](C:\Users\HP\AppData\Roaming\Typora\typora-user-images\image-20260521112428722.png)
+![Overview](./docs/Overview.png)
 
 ```text
 SWAP/
@@ -84,7 +84,7 @@ bash scripts/swap_cocoop/base2new_train.sh imagenet 1
 
 ## Main Results
 
-![image-20260521112502685](C:\Users\HP\AppData\Roaming\Typora\typora-user-images\image-20260521112502685.png)
+![Main Result](./docs/Mainresult.png)
 
 ---
 
