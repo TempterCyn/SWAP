@@ -1,6 +1,4 @@
-# SWAP: Prompt Learning Training and Evaluation Suite
-
-> A clean research codebase for CLIP-based prompt learning methods, including PromptSRC, MaPLe, and CoCoOp.
+# SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking.
 
 ---
 
@@ -26,6 +24,10 @@ The project is organized for reproducible experiments in:
 ---
 
 ## Overview
+
+Pipeline overview (local source file):
+
+- `E:\浏览器下载\POVSW_pipeline (1).pdf`
 
 ```text
 SWAP/
@@ -80,60 +82,38 @@ Before running scripts, update the `DATA` variable in each script to your datase
 
 ---
 
-## Running Experiments
+## Running
 
 All commands below should be executed at repository root.
 
-### PromptSRC (Base-to-Novel)
-
-Train on base classes:
+### Base-to-Novel Training Scripts
 
 ```bash
+# PromptSRC
 bash scripts/swap_promptsrc/base2new_train.sh imagenet 1
-```
-
-Evaluate on novel classes:
-
-```bash
-bash scripts/swap_promptsrc/base2new_test.sh imagenet 1
-```
-
-### PromptSRC (Cross-Dataset / Domain Generalization)
-
-```bash
-bash scripts/swap_promptsrc/xd_train.sh imagenet 1
-bash scripts/swap_promptsrc/xd_test.sh food101 1
-```
-
-### PromptSRC (Few-Shot)
-
-```bash
-bash scripts/swap_promptsrc/few_shot.sh food101 1 1
-```
-
-### MaPLe
-
-```bash
+# MaPLe
 bash scripts/swap_maple/base2new_train_maple.sh imagenet 1
-bash scripts/swap_maple/base2new_test_maple.sh imagenet 1
-```
-
-### CoCoOp
-
-```bash
+# CoCoOp
 bash scripts/swap_cocoop/base2new_train.sh imagenet 1
-bash scripts/swap_cocoop/base2new_test.sh imagenet 1
 ```
 
 ---
 
-## Evaluation and Result Parsing
+## Main Results
 
-Detailed evaluation instructions:
+The table below reports watermarking and verification performance (`WSR`, `p-value`, `Ĥ`) while also showing utility (`ACC Base/Novel`) on three datasets.
 
-- [`docs/EVAL.md`](docs/EVAL.md)
+| Prompt Tuning Method | Protection Method | ImageNet (Base / Novel / WSR / p-value / Ĥ) | Caltech101 (Base / Novel / WSR / p-value / Ĥ) | OxfordPets (Base / Novel / WSR / p-value / Ĥ) |
+|---|---|---|---|---|
+| CoCoOp | SWAP (ours) | 75.89 / 70.10 / 99.98 / 0 / 0.00 | 97.65 / 93.10 / 99.67 / 0 / 0.01 | 94.92 / 97.40 / 99.36 / 0 / 0.00 |
+| MaPLe | SWAP (ours) | 77.13 / 69.26 / 99.95 / 0 / 0.01 | 97.30 / 95.31 / 99.99 / 0 / 0.01 | 95.03 / 96.82 / 99.94 / 0 / 0.01 |
+| PromptSRC | SWAP (ours) | 77.43 / 70.48 / 99.97 / 0 / 0.00 | 96.28 / 94.21 / 99.94 / 0 / 0.00 | 96.13 / 96.80 / 99.99 / 0 / 0.01 |
 
-Typical result parsing:
+For full comparisons with baselines, please refer to your original Table 3 figure.
+
+---
+
+## Evaluation
 
 ```bash
 python parse_test_res.py <output_dir> --test-log
@@ -160,7 +140,6 @@ This codebase builds upon and adapts ideas from:
 
 ---
 
-## Citation
+## Citation Info
 
-If you use this repository in your research, please cite the corresponding papers for the method(s) you use.
-
+Paper link: [https://arxiv.org/abs/2511.04711](https://arxiv.org/abs/2511.04711)
