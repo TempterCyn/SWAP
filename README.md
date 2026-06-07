@@ -104,7 +104,7 @@ This codebase builds upon and adapts ideas from:
 ```bibtex
 @article{yang2026swapcopyrightauditingsoft,
       title={SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking}, 
-      author={Wenyuan Yang and Yichen Sun and Changzheng Chen and Zhixuan Chu and Jiaheng Zhang and Yiming Li and Dacheng Tao},
+      author={Yang, Wenyuan and Sun, Yichen and Chen, Changzheng and Chu, Zhixuan and Zhang, Jiaheng and Li, Yiming and Tao, Dacheng},
       journal={International Journal of Computer Vision},
       year={2026}
 }
