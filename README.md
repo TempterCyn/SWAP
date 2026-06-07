@@ -4,7 +4,7 @@
 
 ## Introduction
 
-This is the official implementation for our paper**["SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking"](https://arxiv.org/abs/2511.04711)**.This paper is accepted by **International Journal of Computer Vision (IJCV)**.
+This is the official implementation for our paper **["SWAP: Towards Copyright Auditing of Soft Prompts via Sequential Watermarking"](https://arxiv.org/abs/2511.04711)**. This paper is accepted by **International Journal of Computer Vision (IJCV)**.
 
 ---
 
